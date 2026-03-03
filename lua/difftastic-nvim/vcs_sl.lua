@@ -140,6 +140,7 @@ end
 
 --- Get the pre-amend commit hash from debugmutation.
 --- Returns the commit before the most recent "amend" operation (skipping metaedits).
+--- The most recent amend is the current commit (marked with *).
 --- @return string|nil Commit hash or nil if not found
 function M.get_pre_amend_commit()
     local handle = io.popen("sl debugmutation -r . 2>/dev/null")
@@ -150,24 +151,30 @@ function M.get_pre_amend_commit()
     local output = handle:read("*a")
     handle:close()
 
-    -- Parse debugmutation tree structure, collecting non-metaedit commits
-    -- Format: "  hash operation by author at timestamp from:"
-    local commits = {}
+    -- The first line (with *) is the current commit
+    -- We want to find what it was before the amend (skipping metaedits)
+    local lines = {}
     for line in output:gmatch("[^\n]+") do
-        local hash, op = line:match("^%s*([a-f0-9]+)%s+(%w+)%s+by")
-        if hash and op ~= "metaedit" then
-            table.insert(commits, { hash = hash, operation = op })
-        end
+        table.insert(lines, line)
     end
 
-    -- Find first amend, return the commit after it (what it came from)
-    for i, commit in ipairs(commits) do
-        if commit.operation == "amend" then
-            -- Return the next non-metaedit commit (what was before the amend)
-            if commits[i + 1] then
-                return commits[i + 1].hash
-            end
-            break
+    if #lines == 0 then
+        return nil
+    end
+
+    -- First line should be current commit with an amend operation
+    local current_hash, current_op = lines[1]:match("^%s*%*?%s*([a-f0-9]+)%s+(%w+)%s+by")
+    if not current_hash or current_op ~= "amend" then
+        -- Current commit wasn't created by amend
+        return nil
+    end
+
+    -- Walk through subsequent lines, skipping metaedits, to find the pre-amend version
+    for i = 2, #lines do
+        local hash, op = lines[i]:match("^%s*([a-f0-9]+)%s+(%w+)%s+by")
+        if hash and op ~= "metaedit" then
+            -- Found the first non-metaedit commit after current
+            return hash
         end
     end
 
