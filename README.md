@@ -90,6 +90,7 @@ Requires a Rust toolchain. The plugin automatically builds from source on first 
 | `:Difft` | Open diff view for unstaged changes (git) or uncommitted changes (jj/sl) |
 | `:Difft --staged` | Open diff view for staged changes (git only) |
 | `:Difft --include-generated` | Open diff view including @generated files |
+| `:Difft --amend` | Compare current commit to pre-amend version (sapling only) |
 | `:Difft <ref>` | Open diff view for a jj revset or git commit/range |
 | `:DifftPick` | Pick a jj revision or git commit using snacks.nvim (with preview) |
 | `:DifftPickRange` | Pick end revision, then pick a parent revision as range start |

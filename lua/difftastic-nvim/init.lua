@@ -158,7 +158,7 @@ function M.setup(opts)
 end
 
 --- Open diff view for a revision/commit range.
---- @param revset string|nil jj revset or git commit range (nil = unstaged, "--staged" = staged, "--include-generated" = include generated files)
+--- @param revset string|nil jj revset or git commit range (nil = unstaged, "--staged" = staged, "--include-generated" = include generated files, "--amend" = compare to pre-amend version)
 function M.open(revset)
     if M.state.tree_win or M.state.left_win or M.state.right_win then
         M.close()
@@ -169,6 +169,33 @@ function M.open(revset)
     if revset == "--include-generated" then
         include_generated = true
         revset = nil -- Treat as unstaged
+    end
+
+    -- Check for --amend flag (sapling only)
+    if revset == "--amend" then
+        if M.config.vcs ~= "sl" then
+            vim.notify("--amend only works with sapling VCS", vim.log.levels.WARN)
+            return
+        end
+
+        -- Get pre-amend commit from debugmutation
+        local vcs_sl = require("difftastic-nvim.vcs_sl")
+        local pre_amend = vcs_sl.get_pre_amend_commit()
+        if not pre_amend then
+            vim.notify("Could not find pre-amend version (no amend in mutation history for this commit)", vim.log.levels.WARN)
+            return
+        end
+
+        -- Get current commit hash
+        local current = vcs_sl.get_current_commit()
+        if not current then
+            vim.notify("Could not get current commit hash", vim.log.levels.ERROR)
+            return
+        end
+
+        -- Compare pre-amend to current commit
+        revset = string.format("%s..%s", pre_amend, current)
+        vim.notify(string.format("Comparing pre-amend (%s) to current (%s)", pre_amend:sub(1, 8), current:sub(1, 8)), vim.log.levels.INFO)
     end
 
     local result
