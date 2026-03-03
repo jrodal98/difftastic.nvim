@@ -11,9 +11,11 @@ local function ensure_treesitter(buf, ft)
         return
     end
 
-    if vim.bo[buf].filetype ~= ft then
-        vim.bo[buf].filetype = ft
-    end
+    -- Stop existing treesitter before changing filetype
+    pcall(vim.treesitter.stop, buf)
+
+    -- Always set filetype (buffers are reused for different files)
+    vim.bo[buf].filetype = ft
 
     pcall(vim.treesitter.start, buf, ft)
 end
@@ -43,7 +45,58 @@ local FILETYPES = {
     HTML = "html",
     CSS = "css",
     Clojure = "clojure",
+    Jsx = "javascriptreact",
+    Tsx = "typescriptreact",
+    PHP = "php",
+    Hack = "hack",
 }
+
+--- Detect filetype from difftastic language or file extension.
+--- @param language string Difftastic language name
+--- @param path string File path
+--- @return string|nil Neovim filetype
+local function detect_filetype(language, path)
+    -- Try direct mapping first
+    local ft = FILETYPES[language]
+    if ft then
+        return ft
+    end
+
+    -- Fallback: detect from file extension
+    local ext = path:match("%.([^.]+)$")
+    if ext then
+        local ext_map = {
+            md = "markdown",
+            js = "javascript",
+            jsx = "javascriptreact",
+            ts = "typescript",
+            tsx = "typescriptreact",
+            py = "python",
+            rs = "rust",
+            go = "go",
+            c = "c",
+            cpp = "cpp",
+            h = "c",
+            hpp = "cpp",
+            java = "java",
+            rb = "ruby",
+            sh = "sh",
+            bash = "bash",
+            yml = "yaml",
+            yaml = "yaml",
+            json = "json",
+            toml = "toml",
+            html = "html",
+            css = "css",
+            lua = "lua",
+            php = "php",
+            hack = "hack",
+        }
+        return ext_map[ext]
+    end
+
+    return nil
+end
 
 --- Set buffer options for diff buffers.
 --- @param buf number Buffer handle
@@ -124,7 +177,7 @@ function M.render(state, file)
     -- Apply syntax highlighting based on mode
     local use_treesitter = config.highlight_mode ~= "difftastic"
     if use_treesitter then
-        local ft = FILETYPES[file.language]
+        local ft = detect_filetype(file.language, file.path)
         if ft then
             ensure_treesitter(state.left_buf, ft)
             ensure_treesitter(state.right_buf, ft)
