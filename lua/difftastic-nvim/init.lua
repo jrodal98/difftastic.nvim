@@ -81,6 +81,7 @@ M.config = {
         focus_diff = "<Tab>",
         select = "<CR>",
         goto_file = "gf",
+        toggle_tree = "-", -- Toggle tree visibility
     },
     tree = {
         width = 40,
@@ -425,6 +426,21 @@ function M.goto_file()
     local line_content = vim.api.nvim_buf_get_lines(0, target_line - 1, target_line, false)[1] or ""
     local target_col = math.min(col, math.max(0, #line_content - 1))
     vim.api.nvim_win_set_cursor(0, { target_line, target_col })
+end
+
+--- Toggle tree visibility.
+function M.toggle_tree()
+    local tree_module = require("difftastic-nvim.tree")
+
+    if M.state.tree_win and vim.api.nvim_win_is_valid(M.state.tree_win) then
+        -- Tree is open, close it
+        vim.api.nvim_win_close(M.state.tree_win, true)
+        M.state.tree_win = nil
+        M.state.tree_buf = nil
+    else
+        -- Tree is closed, reopen it
+        tree_module.open(M.state)
+    end
 end
 
 --- Update binary to latest release.

@@ -166,6 +166,7 @@ All keybindings are buffer-local and configurable via `setup()`. Defaults:
 | `<Tab>` | Toggle focus between file tree and diff |
 | `<CR>` | Open file under cursor (in file tree) |
 | `gf` | Go to file at cursor position (opens in previous tab or new tab) |
+| `-` | Toggle file tree visibility |
 | `q` | Close diff view |
 
 The `gf` keymap works from the right pane (new/working version) and jumps to the corresponding line and column in an editable buffer. If on a filler line, it jumps to the nearest non-filler line.
@@ -198,6 +199,7 @@ require("difftastic-nvim").setup({
         focus_diff = "<Tab>",
         select = "<CR>",
         goto_file = "gf",
+        toggle_tree = "-",
     },
     tree = {
         width = 40,
