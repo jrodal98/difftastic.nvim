@@ -283,6 +283,9 @@ local function jj_preview(opts)
     end
 end
 
+
+
+
 local function effective_jj_revset(opts, rev_filter)
     if is_set(rev_filter) and is_set(opts.jj_log_revset) then
         return string.format("(%s) & (%s)", rev_filter, opts.jj_log_revset)
@@ -296,6 +299,12 @@ end
 local function load_items(vcs, opts, rev_filter, exclude_rev, include_staged)
     if vcs == "git" then
         return git_items(opts.limit, rev_filter, exclude_rev, include_staged)
+    end
+
+    if vcs == "sl" then
+        local vcs_sl = require("difftastic-nvim.vcs_sl")
+        local sl_revset = vcs_sl.effective_revset(opts, rev_filter)
+        return vcs_sl.items(opts.limit, sl_revset, exclude_rev)
     end
 
     local jj_revset = effective_jj_revset(opts, rev_filter)
@@ -317,6 +326,15 @@ local function open_picker(snacks, vcs, opts, items, title, on_select, jj_previe
         return
     end
 
+    -- Sapling preview
+    local preview_fn = "none"
+    if vcs == "sl" then
+        local vcs_sl = require("difftastic-nvim.vcs_sl")
+        preview_fn = vcs_sl.preview(vim.tbl_extend("force", opts, { sl_log_revset = jj_preview_revset }))
+    elseif vcs == "jj" then
+        preview_fn = jj_preview(vim.tbl_extend("force", opts, { jj_log_revset = jj_preview_revset }))
+    end
+
     if snacks.picker and snacks.picker.pick then
         snacks.picker.pick({
             title = title,
@@ -327,7 +345,7 @@ local function open_picker(snacks, vcs, opts, items, title, on_select, jj_previe
                 end
                 return { { item.text } }
             end,
-            preview = vcs == "jj" and jj_preview(vim.tbl_extend("force", opts, { jj_log_revset = jj_preview_revset })) or "none",
+            preview = preview_fn,
             on_change = vcs == "jj" and function(picker, item)
                 if not (item and item.rev and picker.preview and picker.preview.win) then
                     return
@@ -392,9 +410,12 @@ function M.pick(vcs, opts, on_select)
         return
     end
 
-    local title = vcs == "git" and "Select git commit" or "Select jj revision"
+    local title = vcs == "git" and "Select git commit"
+        or vcs == "sl" and require("difftastic-nvim.vcs_sl").title("pick")
+        or "Select jj revision"
 
-    open_picker(snacks, vcs, opts, items, title, on_select, opts.jj_log_revset)
+    local preview_revset = vcs == "sl" and opts.sl_log_revset or opts.jj_log_revset
+    open_picker(snacks, vcs, opts, items, title, on_select, preview_revset)
 end
 
 --- Open two pickers (end then start parent) and invoke callback with range.
@@ -418,11 +439,16 @@ function M.pick_range(vcs, opts, on_select)
         return
     end
 
-    local end_title = vcs == "git" and "Select range end (git)" or "Select range end (jj)"
+    local end_title = vcs == "git" and "Select range end (git)"
+        or vcs == "sl" and require("difftastic-nvim.vcs_sl").title("range_end")
+        or "Select range end (jj)"
+    local log_revset = vcs == "sl" and opts.sl_log_revset or opts.jj_log_revset
     open_picker(snacks, vcs, opts, end_items, end_title, function(end_rev)
         local parent_filter
         if vcs == "git" then
             parent_filter = end_rev
+        elseif vcs == "sl" then
+            parent_filter = require("difftastic-nvim.vcs_sl").range_ancestor_filter(end_rev)
         else
             -- Only show valid start points on the path from trunk() to end_rev,
             -- so we don't include immutable history prior to trunk.
@@ -440,10 +466,12 @@ function M.pick_range(vcs, opts, on_select)
         end
 
         local start_title = string.format("Select range start (end: %s)", end_rev:sub(1, 12))
+        local start_preview_revset = vcs == "sl" and require("difftastic-nvim.vcs_sl").effective_revset(opts, parent_filter)
+            or effective_jj_revset(opts, parent_filter)
         open_picker(snacks, vcs, opts, start_items, start_title, function(start_rev)
             on_select(start_rev, end_rev)
-        end, effective_jj_revset(opts, parent_filter))
-    end, opts.jj_log_revset)
+        end, start_preview_revset)
+    end, log_revset)
 end
 
 return M

@@ -3,8 +3,9 @@
 //! A Neovim plugin for displaying difftastic diffs in a side-by-side viewer.
 //!
 //! This crate provides Lua bindings for parsing [difftastic](https://difftastic.wilfred.me.uk/)
-//! JSON output and processing it into a display-ready format. It supports both
-//! [jj](https://github.com/martinvonz/jj) and [git](https://git-scm.com/) version control systems.
+//! JSON output and processing it into a display-ready format. It supports
+//! [jj](https://github.com/martinvonz/jj), [git](https://git-scm.com/), and
+//! [Sapling](https://sapling-scm.com/) version control systems.
 //!
 //! ## Architecture
 //!
@@ -44,6 +45,7 @@ use std::process::Command;
 
 mod difftastic;
 mod processor;
+mod vcs_sl; // Sapling VCS support (fork-specific module)
 
 /// Splits file content into individual lines, or empty vector if `None`.
 #[inline]
@@ -184,7 +186,7 @@ fn jj_to_git_commit(revset: &str) -> Option<String> {
 /// Parses a jj range of the form `A..B` into `(A, B)`.
 /// Returns `None` for non-range revsets.
 #[inline]
-fn parse_jj_range(revset: &str) -> Option<(String, String)> {
+pub fn parse_jj_range(revset: &str) -> Option<(String, String)> {
     let (old, new) = revset.split_once("..")?;
     if old.is_empty() || new.is_empty() {
         return None;
@@ -251,6 +253,24 @@ fn run_jj_diff_uncommitted() -> Result<Vec<difftastic::DifftFile>, String> {
     difftastic::parse(&String::from_utf8_lossy(&output.stdout))
         .map_err(|e| format!("Failed to parse difftastic JSON: {e}"))
 }
+
+/// Fetches file content from sapling at a specific revision via `sl cat`.
+
+
+
+/// Gets diff stats from sapling using `sl diff --stat`.
+
+/// Parses `sl diff --stat` output into file stats.
+/// Format: " path/to/file.txt | number +++---"
+
+/// Runs difftastic via sapling and parses the JSON output.
+/// Executes `sl difft -c <revset>` to show changes made by the revision.
+
+/// Runs difftastic via sapling for a range (two revisions).
+/// Executes `sl difft -r <old> -r <new>` to compare two revisions.
+
+/// Runs difftastic via sapling for uncommitted changes (working copy).
+/// Executes `sl difft` with no revision argument.
 
 /// Runs difftastic via git and parses the JSON output.
 /// Executes `git diff` with difftastic as the external diff tool.
@@ -441,6 +461,10 @@ fn jj_rename_map(mode: &DiffMode) -> HashMap<PathBuf, PathBuf> {
     parse_jj_summary_renames(&String::from_utf8_lossy(&output.stdout))
 }
 
+
+/// Parses `sl status -C` output to extract rename mappings.
+/// Format: Lines with status "A" followed by a line with two spaces and the source path.
+
 /// Parses a git commit range into `(old_commit, new_commit)` references.
 ///
 /// Handles single commits, `A..B` ranges, and `A...B` (merge-base) ranges.
@@ -457,18 +481,22 @@ fn parse_git_range(range: &str) -> (String, String) {
 }
 
 /// The type of diff to perform.
-enum DiffMode {
-    /// A commit range (e.g., "HEAD^..HEAD" for git, "@" for jj).
+pub enum DiffMode {
+    /// A commit range (e.g., "HEAD^..HEAD" for git, "@" for jj, "." for sl).
     Range(String),
-    /// Unstaged changes: working tree vs index (git) or working copy vs @ (jj).
+    /// Unstaged changes: working tree vs index (git), working copy vs @ (jj), or working copy vs . (sl).
     Unstaged,
-    /// Staged changes: index vs HEAD (git only, jj falls back to @).
+    /// Staged changes: index vs HEAD (git only; jj and sl fall back to showing current commit).
     Staged,
 }
 
 /// Fetches file content from the working tree, using the appropriate VCS root.
 fn working_tree_content_for_vcs(path: &Path, vcs: &str) -> Option<String> {
-    let root = if vcs == "git" { git_root() } else { jj_root() }?;
+    let root = match vcs {
+        "git" => git_root(),
+        "sl" => vcs_sl::sl_root(),
+        _ => jj_root(),
+    }?;
     std::fs::read_to_string(root.join(path)).ok()
 }
 
@@ -484,6 +512,16 @@ fn run_diff_impl(lua: &Lua, mode: DiffMode, vcs: &str) -> LuaResult<LuaTable> {
             let stats = git_diff_stats(&[&git_range]);
             (files, stats)
         }
+        (DiffMode::Range(range), "sl") => {
+            // For ranges like "A..B", use two -r flags. For single revsets, use -c flag.
+            let files = if let Some((old, new)) = parse_jj_range(range) {
+                vcs_sl::run_sl_diff_range(&old, &new).map_err(LuaError::RuntimeError)?
+            } else {
+                vcs_sl::run_sl_diff(range).map_err(LuaError::RuntimeError)?
+            };
+            let stats = vcs_sl::sl_diff_stats(range);
+            (files, stats)
+        }
         (DiffMode::Range(range), _) => {
             let files = run_jj_diff(range).map_err(LuaError::RuntimeError)?;
             let stats = jj_diff_stats(range);
@@ -494,6 +532,11 @@ fn run_diff_impl(lua: &Lua, mode: DiffMode, vcs: &str) -> LuaResult<LuaTable> {
             let stats = git_diff_stats(&[]);
             (files, stats)
         }
+        (DiffMode::Unstaged, "sl") => {
+            let files = vcs_sl::run_sl_diff_uncommitted().map_err(LuaError::RuntimeError)?;
+            let stats = vcs_sl::sl_diff_stats_uncommitted();
+            (files, stats)
+        }
         (DiffMode::Unstaged, _) => {
             let files = run_jj_diff_uncommitted().map_err(LuaError::RuntimeError)?;
             let stats = jj_diff_stats_uncommitted();
@@ -502,6 +545,12 @@ fn run_diff_impl(lua: &Lua, mode: DiffMode, vcs: &str) -> LuaResult<LuaTable> {
         (DiffMode::Staged, "git") => {
             let files = run_git_diff(&["--cached"]).map_err(LuaError::RuntimeError)?;
             let stats = git_diff_stats(&["--cached"]);
+            (files, stats)
+        }
+        (DiffMode::Staged, "sl") => {
+            // sl doesn't have a staging area concept, so show current commit diff
+            let files = vcs_sl::run_sl_diff(".").map_err(LuaError::RuntimeError)?;
+            let stats = vcs_sl::sl_diff_stats(".");
             (files, stats)
         }
         (DiffMode::Staged, _) => {
@@ -523,6 +572,20 @@ fn run_diff_impl(lua: &Lua, mode: DiffMode, vcs: &str) -> LuaResult<LuaTable> {
                         prepare_file_for_display(&mut file, &stats);
                     let old_lines = into_lines(git_file_content(&old_ref, &old_path));
                     let new_lines = into_lines(git_file_content(&new_ref, &new_path));
+                    process_prepared_file(file, old_lines, new_lines, file_stats, moved_from)
+                })
+                .collect()
+        }
+        (DiffMode::Range(range), "sl") => {
+            let (old_ref, new_ref) = parse_jj_range(range)
+                .unwrap_or_else(|| (format!("{range}^"), range.to_string()));
+            files
+                .into_par_iter()
+                .map(|mut file| {
+                    let (file_stats, old_path, new_path, moved_from) =
+                        prepare_file_for_display(&mut file, &stats);
+                    let old_lines = into_lines(vcs_sl::sl_file_content(&old_ref, &old_path));
+                    let new_lines = into_lines(vcs_sl::sl_file_content(&new_ref, &new_path));
                     process_prepared_file(file, old_lines, new_lines, file_stats, moved_from)
                 })
                 .collect()
@@ -551,6 +614,16 @@ fn run_diff_impl(lua: &Lua, mode: DiffMode, vcs: &str) -> LuaResult<LuaTable> {
                 process_prepared_file(file, old_lines, new_lines, file_stats, moved_from)
             })
             .collect(),
+        (DiffMode::Unstaged, "sl") => files
+            .into_par_iter()
+            .map(|mut file| {
+                let (file_stats, old_path, new_path, moved_from) =
+                    prepare_file_for_display(&mut file, &stats);
+                let old_lines = into_lines(vcs_sl::sl_file_content(".", &old_path));
+                let new_lines = into_lines(working_tree_content_for_vcs(&new_path, "sl"));
+                process_prepared_file(file, old_lines, new_lines, file_stats, moved_from)
+            })
+            .collect(),
         (DiffMode::Unstaged, _) => files
             .into_par_iter()
             .map(|mut file| {
@@ -571,6 +644,16 @@ fn run_diff_impl(lua: &Lua, mode: DiffMode, vcs: &str) -> LuaResult<LuaTable> {
                 process_prepared_file(file, old_lines, new_lines, file_stats, moved_from)
             })
             .collect(),
+        (DiffMode::Staged, "sl") => files
+            .into_par_iter()
+            .map(|mut file| {
+                let (file_stats, old_path, new_path, moved_from) =
+                    prepare_file_for_display(&mut file, &stats);
+                let old_lines = into_lines(vcs_sl::sl_file_content(".^", &old_path));
+                let new_lines = into_lines(vcs_sl::sl_file_content(".", &new_path));
+                process_prepared_file(file, old_lines, new_lines, file_stats, moved_from)
+            })
+            .collect(),
         (DiffMode::Staged, _) => files
             .into_par_iter()
             .map(|mut file| {
@@ -585,6 +668,8 @@ fn run_diff_impl(lua: &Lua, mode: DiffMode, vcs: &str) -> LuaResult<LuaTable> {
 
     let renames = if vcs == "git" {
         git_rename_map(&mode)
+    } else if vcs == "sl" {
+        vcs_sl::sl_rename_map(&mode)
     } else {
         jj_rename_map(&mode)
     };

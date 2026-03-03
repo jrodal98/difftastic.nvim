@@ -13,7 +13,7 @@ view with syntax highlighting.
 - Hierarchical file tree sidebar with directory collapsing
 - Syntax highlighting for the source language
 - Filler lines to visually indicate alignment gaps
-- Support for both [jj](https://github.com/martinvonz/jj) and [git](https://git-scm.com/) version control
+- Support for both [jj](https://github.com/martinvonz/jj), [git](https://git-scm.com/), and [Sapling](https://sapling-scm.com/) version control
 - Optional snacks.nvim picker for selecting a revision/commit
 
 ## Installation
@@ -23,7 +23,7 @@ view with syntax highlighting.
 - Neovim 0.9+
 - [nui.nvim](https://github.com/MunifTanjim/nui.nvim)
 - [difftastic](https://github.com/Wilfred/difftastic) (`difft` command)
-- [jj](https://github.com/martinvonz/jj) or [git](https://git-scm.com/) version control
+- [jj](https://github.com/martinvonz/jj), [git](https://git-scm.com/), or [Sapling](https://sapling-scm.com/) version control
 - Rust toolchain (only if building from source)
 - [snacks.nvim](https://github.com/folke/snacks.nvim) (optional, only for `:DifftPick`)
 
@@ -133,6 +133,25 @@ Requires a Rust toolchain. The plugin automatically builds from source on first 
 :Difft main..HEAD
 ```
 
+### Examples (sapling)
+
+```vim
+" Diff uncommitted changes (working copy vs current commit)
+:Difft
+
+" Diff the current commit (shows changes made by this commit)
+:Difft .
+
+" Diff the parent commit
+:Difft .^
+
+" Diff a specific commit
+:Difft abc123
+
+" Diff between two commits (use two -r flags via range syntax)
+:Difft .^::.
+```
+
 ## Keybindings
 
 All keybindings are buffer-local and configurable via `setup()`. Defaults:
@@ -157,7 +176,7 @@ Filler lines (`╱╱╱`) indicate where content exists on one side but not the
 ```lua
 require("difftastic-nvim").setup({
     download = false,              -- Auto-download pre-built binary (default: false)
-    vcs = "jj",                    -- "jj" (default) or "git"
+    vcs = "jj",                    -- "jj" (default), "git", or "sl"
     highlight_mode = "treesitter", -- "treesitter" (default) or "difftastic"
     hunk_wrap_file = true,          -- Next hunk at last hunk goes to next file
     scroll_to_first_hunk = true,  -- Auto-scroll to first hunk after opening a file (default: true)
@@ -165,6 +184,7 @@ require("difftastic-nvim").setup({
         enabled = false,          -- opt-in snacks.nvim integration (default: false)
         limit = 200,              -- number of revisions/commits to list in :DifftPick
         jj_log_revset = nil,      -- optional: jj revset for picker log (nil = omit -r and use jj default)
+        sl_log_revset = nil,      -- optional: sl revset for picker log (nil = omit -r and use sl default)
     },
     keymaps = {
         next_file = "]f",
