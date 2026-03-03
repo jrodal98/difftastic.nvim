@@ -87,8 +87,9 @@ Requires a Rust toolchain. The plugin automatically builds from source on first 
 
 | Command | Description |
 |---------|-------------|
-| `:Difft` | Open diff view for unstaged changes (git) or uncommitted changes (jj) |
+| `:Difft` | Open diff view for unstaged changes (git) or uncommitted changes (jj/sl) |
 | `:Difft --staged` | Open diff view for staged changes (git only) |
+| `:Difft --include-generated` | Open diff view including @generated files |
 | `:Difft <ref>` | Open diff view for a jj revset or git commit/range |
 | `:DifftPick` | Pick a jj revision or git commit using snacks.nvim (with preview) |
 | `:DifftPickRange` | Pick end revision, then pick a parent revision as range start |
@@ -177,6 +178,7 @@ Filler lines (`╱╱╱`) indicate where content exists on one side but not the
 require("difftastic-nvim").setup({
     download = false,              -- Auto-download pre-built binary (default: false)
     vcs = "jj",                    -- "jj" (default), "git", or "sl"
+    exclude_generated = true,      -- Exclude files with @generated markers (default: true)
     highlight_mode = "treesitter", -- "treesitter" (default) or "difftastic"
     hunk_wrap_file = true,          -- Next hunk at last hunk goes to next file
     scroll_to_first_hunk = true,  -- Auto-scroll to first hunk after opening a file (default: true)

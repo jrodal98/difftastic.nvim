@@ -18,6 +18,9 @@ vim.api.nvim_create_user_command("Difft", function(opts)
     elseif args == "--staged" then
         -- Show staged changes
         require("difftastic-nvim").open("--staged")
+    elseif args == "--include-generated" then
+        -- Show unstaged changes including @generated files
+        require("difftastic-nvim").open("--include-generated")
     else
         -- Revset/commit range
         local revset = args:gsub("^['\"](.+)['\"]$", "%1")
@@ -25,7 +28,7 @@ vim.api.nvim_create_user_command("Difft", function(opts)
     end
 end, {
     nargs = "?",
-    desc = "Open difftastic diff view (no args = unstaged, --staged = staged, or revset/commit)",
+    desc = "Open difftastic diff view (no args = unstaged, --staged = staged, --include-generated = show all files, or revset/commit)",
 })
 
 vim.api.nvim_create_user_command("DifftClose", function()

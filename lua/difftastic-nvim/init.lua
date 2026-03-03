@@ -7,6 +7,58 @@ local tree = require("difftastic-nvim.tree")
 local highlight = require("difftastic-nvim.highlight")
 local keymaps = require("difftastic-nvim.keymaps")
 
+--- Checks if a file contains @generated or @partially-generated marker in first 50 lines.
+--- @param path string
+--- @return boolean
+local function is_generated_file(path)
+    -- Get VCS root to resolve relative paths
+    local vcs_root
+    if M.config.vcs == "git" then
+        local handle = io.popen("git rev-parse --show-toplevel 2>/dev/null")
+        if handle then
+            vcs_root = handle:read("*l")
+            handle:close()
+        end
+    elseif M.config.vcs == "sl" then
+        local handle = io.popen("sl root 2>/dev/null")
+        if handle then
+            vcs_root = handle:read("*l")
+            handle:close()
+        end
+    else -- jj
+        local handle = io.popen("jj root 2>/dev/null")
+        if handle then
+            vcs_root = handle:read("*l")
+            handle:close()
+        end
+    end
+
+    if not vcs_root then
+        return false
+    end
+
+    local full_path = vcs_root .. "/" .. path
+    local file = io.open(full_path, "r")
+    if not file then
+        return false
+    end
+
+    -- Check first 50 lines for @generated or @partially-generated markers
+    for i = 1, 50 do
+        local line = file:read("*l")
+        if not line then
+            break
+        end
+        if line:match("@generated") or line:match("@partially%-generated") then
+            file:close()
+            return true
+        end
+    end
+
+    file:close()
+    return false
+end
+
 --- Default configuration
 M.config = {
     download = false,
@@ -17,6 +69,8 @@ M.config = {
     hunk_wrap_file = true,
     --- When true, scroll to first hunk after opening a file
     scroll_to_first_hunk = true,
+    --- When true, exclude files containing @generated markers (default: true)
+    exclude_generated = true,
     keymaps = {
         next_file = "]f",
         prev_file = "[f",
@@ -103,10 +157,17 @@ function M.setup(opts)
 end
 
 --- Open diff view for a revision/commit range.
---- @param revset string|nil jj revset or git commit range (nil = unstaged, "--staged" = staged)
+--- @param revset string|nil jj revset or git commit range (nil = unstaged, "--staged" = staged, "--include-generated" = include generated files)
 function M.open(revset)
     if M.state.tree_win or M.state.left_win or M.state.right_win then
         M.close()
+    end
+
+    -- Check for --include-generated flag
+    local include_generated = false
+    if revset == "--include-generated" then
+        include_generated = true
+        revset = nil -- Treat as unstaged
     end
 
     local result
@@ -120,6 +181,28 @@ function M.open(revset)
     if not result.files or #result.files == 0 then
         vim.notify("No changes found", vim.log.levels.INFO)
         return
+    end
+
+    -- Filter out @generated files unless explicitly included
+    if M.config.exclude_generated and not include_generated then
+        local original_count = #result.files
+        result.files = vim.tbl_filter(function(file)
+            return not is_generated_file(file.path)
+        end, result.files)
+
+        local filtered_count = original_count - #result.files
+        if filtered_count > 0 then
+            vim.notify(
+                string.format("Filtered %d @generated/@partially-generated file%s (use :Difft --include-generated to show all)",
+                    filtered_count, filtered_count == 1 and "" or "s"),
+                vim.log.levels.INFO
+            )
+        end
+
+        if #result.files == 0 then
+            vim.notify("No changes found (all files are @generated/@partially-generated)", vim.log.levels.INFO)
+            return
+        end
     end
 
     M.state.files = result.files
