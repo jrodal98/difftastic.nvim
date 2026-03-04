@@ -500,6 +500,47 @@ fn working_tree_content_for_vcs(path: &Path, vcs: &str) -> Option<String> {
     std::fs::read_to_string(root.join(path)).ok()
 }
 
+/// Checks if file content contains @generated or @partially-generated marker in first 50 lines.
+fn is_generated_file_content(content: &str) -> bool {
+    content
+        .lines()
+        .take(50)
+        .any(|line| line.contains("@generated") || line.contains("@partially-generated"))
+}
+
+/// Maximum number of lines allowed in a single file before skipping to prevent stack overflow.
+const MAX_FILE_LINES: usize = 5000;
+
+/// Maximum file size in bytes (roughly 5000 lines * 100 chars/line = 500KB).
+/// This is a conservative estimate to catch large files before reading them.
+const MAX_FILE_SIZE_BYTES: u64 = 500_000;
+
+/// Checks if a file should be skipped due to excessive size.
+/// Files with more than MAX_FILE_LINES are skipped to prevent Lua stack overflow.
+/// For created/deleted files, estimates size based on file size on disk.
+/// For changed files, counts aligned_lines directly.
+fn should_skip_oversized_file(file: &difftastic::DifftFile, vcs_root: &Option<PathBuf>) -> bool {
+    match file.status {
+        difftastic::Status::Created | difftastic::Status::Deleted => {
+            // For created/deleted files, check file size on disk
+            if let Some(root) = vcs_root {
+                let file_path = root.join(&file.path);
+                if let Ok(metadata) = std::fs::metadata(&file_path) {
+                    let file_size = metadata.len();
+                    // Rough estimate: 100 bytes per line average
+                    let estimated_lines = file_size / 100;
+                    return estimated_lines as usize > MAX_FILE_LINES || file_size > MAX_FILE_SIZE_BYTES;
+                }
+            }
+            false
+        }
+        difftastic::Status::Changed | difftastic::Status::Unchanged => {
+            // For changed files, count aligned_lines directly
+            file.aligned_lines.len() > MAX_FILE_LINES
+        }
+    }
+}
+
 /// Unified implementation for running difftastic with any diff mode.
 /// Handles git and jj VCS, fetches file contents, and processes files in parallel.
 fn run_diff_impl(lua: &Lua, mode: DiffMode, vcs: &str) -> LuaResult<LuaTable> {
@@ -560,6 +601,44 @@ fn run_diff_impl(lua: &Lua, mode: DiffMode, vcs: &str) -> LuaResult<LuaTable> {
             (files, stats)
         }
     };
+
+    // Filter out @generated and oversized files BEFORE processing to prevent stack overflow
+    let vcs_root = match vcs {
+        "git" => git_root(),
+        "sl" => vcs_sl::sl_root(),
+        _ => jj_root(),
+    };
+
+    let files: Vec<_> = files
+        .into_iter()
+        .filter(|file| {
+            // Skip oversized files (prevents Lua stack overflow)
+            if should_skip_oversized_file(file, &vcs_root) {
+                eprintln!(
+                    "Skipping oversized file: {} (exceeds {} line limit)",
+                    file.path.display(),
+                    MAX_FILE_LINES
+                );
+                return false;
+            }
+
+            // Skip @generated files (read first 50 lines of file)
+            if let Some(root) = &vcs_root {
+                let file_path = root.join(&file.path);
+                if let Ok(content) = std::fs::read_to_string(&file_path) {
+                    if is_generated_file_content(&content) {
+                        eprintln!(
+                            "Skipping @generated file: {}",
+                            file.path.display()
+                        );
+                        return false;
+                    }
+                }
+            }
+
+            true
+        })
+        .collect();
 
     // Process files based on mode and VCS
     let mut display_files: Vec<_> = match (&mode, vcs) {
@@ -852,5 +931,94 @@ mod tests {
             Some(&PathBuf::from("a.txt"))
         );
         assert!(!renames.contains_key(Path::new("c.txt")));
+    }
+
+    #[test]
+    fn test_is_generated_file_with_generated_marker() {
+        // File content with @generated marker in first 50 lines
+        let content = "// @generated SignedSource<<abc123>>\n\nfunction foo() {}\n";
+        assert!(is_generated_file_content(content));
+    }
+
+    #[test]
+    fn test_is_generated_file_with_partially_generated_marker() {
+        // File content with @partially-generated marker
+        let content = "/**\n * @partially-generated\n */\ncode here\n";
+        assert!(is_generated_file_content(content));
+    }
+
+    #[test]
+    fn test_is_generated_file_without_marker() {
+        // Regular file without @generated marker
+        let content = "// Normal file\n\nfunction bar() {}\n";
+        assert!(!is_generated_file_content(content));
+    }
+
+    #[test]
+    fn test_is_generated_file_marker_after_line_50() {
+        // @generated marker appears after line 50 (should not be detected)
+        let mut content = String::new();
+        for i in 1..=60 {
+            if i == 55 {
+                content.push_str("// @generated marker here\n");
+            } else {
+                content.push_str(&format!("// Line {}\n", i));
+            }
+        }
+        assert!(!is_generated_file_content(&content));
+    }
+
+    #[test]
+    fn test_should_skip_oversized_file() {
+        // File with exactly 5000 lines should NOT be skipped
+        let aligned_lines = vec![(Some(0), Some(0)); 5000];
+        let file = difftastic::DifftFile {
+            path: "normal.rs".into(),
+            language: "Rust".into(),
+            status: difftastic::Status::Changed,
+            aligned_lines,
+            chunks: vec![],
+        };
+        assert!(!should_skip_oversized_file(&file, &None));
+    }
+
+    #[test]
+    fn test_should_skip_oversized_file_above_limit() {
+        // File with 5001 lines SHOULD be skipped
+        let aligned_lines = vec![(Some(0), Some(0)); 5001];
+        let file = difftastic::DifftFile {
+            path: "huge.rs".into(),
+            language: "Rust".into(),
+            status: difftastic::Status::Changed,
+            aligned_lines,
+            chunks: vec![],
+        };
+        assert!(should_skip_oversized_file(&file, &None));
+    }
+
+    #[test]
+    fn test_should_skip_oversized_file_created_no_root() {
+        // Created file without VCS root should NOT be skipped (can't check size)
+        let file = difftastic::DifftFile {
+            path: "new.rs".into(),
+            language: "Rust".into(),
+            status: difftastic::Status::Created,
+            aligned_lines: vec![],
+            chunks: vec![],
+        };
+        assert!(!should_skip_oversized_file(&file, &None));
+    }
+
+    #[test]
+    fn test_should_skip_oversized_file_deleted_small() {
+        // Deleted file that doesn't exist on disk should NOT be skipped
+        let file = difftastic::DifftFile {
+            path: "nonexistent.rs".into(),
+            language: "Rust".into(),
+            status: difftastic::Status::Deleted,
+            aligned_lines: vec![],
+            chunks: vec![],
+        };
+        assert!(!should_skip_oversized_file(&file, &Some(PathBuf::from("/tmp"))));
     }
 }
