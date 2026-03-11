@@ -158,7 +158,7 @@ function M.setup(opts)
 end
 
 --- Open diff view for a revision/commit range.
---- @param revset string|nil jj revset or git commit range (nil = unstaged, "--staged" = staged, "--include-generated" = include generated files, "--amend" = compare to pre-amend version)
+--- @param revset string|nil jj revset or git commit range (nil = unstaged, "--staged" = staged, "--include-generated" = include generated files, "--amend" = compare to pre-amend version, "--rebase" = compare to pre-rebase version)
 function M.open(revset)
     if M.state.tree_win or M.state.left_win or M.state.right_win then
         M.close()
@@ -171,31 +171,40 @@ function M.open(revset)
         revset = nil -- Treat as unstaged
     end
 
-    -- Check for --amend flag (sapling only)
-    if revset == "--amend" then
+    -- Check for --amend / --rebase flags (sapling only)
+    local mutation_ops = { ["--amend"] = "amend", ["--rebase"] = "rebase" }
+    local mutation_op = mutation_ops[revset]
+    local file_filter = nil
+    if mutation_op then
         if M.config.vcs ~= "sl" then
-            vim.notify("--amend only works with sapling VCS", vim.log.levels.WARN)
+            vim.notify("--" .. mutation_op .. " only works with sapling VCS", vim.log.levels.WARN)
             return
         end
 
-        -- Get pre-amend commit from debugmutation
         local vcs_sl = require("difftastic-nvim.vcs_sl")
-        local pre_amend = vcs_sl.get_pre_amend_commit()
-        if not pre_amend then
-            vim.notify("Could not find pre-amend version (no amend in mutation history for this commit)", vim.log.levels.WARN)
+        local pre_commit = vcs_sl.get_pre_mutation_commit(mutation_op)
+        if not pre_commit then
+            vim.notify(
+                string.format("Could not find pre-%s version (no %s in mutation history for this commit)", mutation_op, mutation_op),
+                vim.log.levels.WARN
+            )
             return
         end
 
-        -- Get current commit hash
         local current = vcs_sl.get_current_commit()
         if not current then
             vim.notify("Could not get current commit hash", vim.log.levels.ERROR)
             return
         end
 
-        -- Compare pre-amend to current commit
-        revset = string.format("%s..%s", pre_amend, current)
-        vim.notify(string.format("Comparing pre-amend (%s) to current (%s)", pre_amend:sub(1, 8), current:sub(1, 8)), vim.log.levels.INFO)
+        -- For rebase, limit diff to files in the current commit to avoid
+        -- diffing the entire tree (base changed, so a full diff is enormous)
+        if mutation_op == "rebase" then
+            file_filter = vcs_sl.get_commit_files()
+        end
+
+        revset = string.format("%s..%s", pre_commit, current)
+        vim.notify(string.format("Comparing pre-%s (%s) to current (%s)", mutation_op, pre_commit:sub(1, 8), current:sub(1, 8)), vim.log.levels.INFO)
     end
 
     local result
@@ -203,6 +212,8 @@ function M.open(revset)
         result = binary.get().run_diff_unstaged(M.config.vcs)
     elseif revset == "--staged" then
         result = binary.get().run_diff_staged(M.config.vcs)
+    elseif file_filter then
+        result = binary.get().run_diff_with_file_filter(revset, M.config.vcs, file_filter)
     else
         result = binary.get().run_diff(revset, M.config.vcs)
     end

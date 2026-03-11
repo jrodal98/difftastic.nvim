@@ -543,7 +543,14 @@ fn should_skip_oversized_file(file: &difftastic::DifftFile, vcs_root: &Option<Pa
 
 /// Unified implementation for running difftastic with any diff mode.
 /// Handles git and jj VCS, fetches file contents, and processes files in parallel.
-fn run_diff_impl(lua: &Lua, mode: DiffMode, vcs: &str) -> LuaResult<LuaTable> {
+/// `file_filter` optionally limits which files are diffed (used for --rebase to avoid
+/// diffing the entire tree when the base changed).
+fn run_diff_impl(
+    lua: &Lua,
+    mode: DiffMode,
+    vcs: &str,
+    file_filter: &[String],
+) -> LuaResult<LuaTable> {
     // Get files and stats based on mode and VCS
     let (files, stats) = match (&mode, vcs) {
         (DiffMode::Range(range), "git") => {
@@ -556,7 +563,8 @@ fn run_diff_impl(lua: &Lua, mode: DiffMode, vcs: &str) -> LuaResult<LuaTable> {
         (DiffMode::Range(range), "sl") => {
             // For ranges like "A..B", use two -r flags. For single revsets, use -c flag.
             let files = if let Some((old, new)) = parse_jj_range(range) {
-                vcs_sl::run_sl_diff_range(&old, &new).map_err(LuaError::RuntimeError)?
+                vcs_sl::run_sl_diff_range(&old, &new, file_filter)
+                    .map_err(LuaError::RuntimeError)?
             } else {
                 vcs_sl::run_sl_diff(range).map_err(LuaError::RuntimeError)?
             };
@@ -784,17 +792,25 @@ fn run_diff_impl(lua: &Lua, mode: DiffMode, vcs: &str) -> LuaResult<LuaTable> {
 
 /// Runs difftastic for a commit range.
 fn run_diff(lua: &Lua, (range, vcs): (String, String)) -> LuaResult<LuaTable> {
-    run_diff_impl(lua, DiffMode::Range(range), &vcs)
+    run_diff_impl(lua, DiffMode::Range(range), &vcs, &[])
+}
+
+/// Runs difftastic for a commit range, limited to specific files.
+fn run_diff_with_file_filter(
+    lua: &Lua,
+    (range, vcs, files): (String, String, Vec<String>),
+) -> LuaResult<LuaTable> {
+    run_diff_impl(lua, DiffMode::Range(range), &vcs, &files)
 }
 
 /// Runs difftastic for unstaged changes.
 fn run_diff_unstaged(lua: &Lua, vcs: String) -> LuaResult<LuaTable> {
-    run_diff_impl(lua, DiffMode::Unstaged, &vcs)
+    run_diff_impl(lua, DiffMode::Unstaged, &vcs, &[])
 }
 
 /// Runs difftastic for staged changes.
 fn run_diff_staged(lua: &Lua, vcs: String) -> LuaResult<LuaTable> {
-    run_diff_impl(lua, DiffMode::Staged, &vcs)
+    run_diff_impl(lua, DiffMode::Staged, &vcs, &[])
 }
 
 /// Creates the Lua module exports. Called by mlua when loaded via `require("difftastic_nvim")`.
@@ -804,6 +820,12 @@ fn difftastic_nvim(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "run_diff",
         lua.create_function(|lua, args: (String, String)| run_diff(lua, args))?,
+    )?;
+    exports.set(
+        "run_diff_with_file_filter",
+        lua.create_function(|lua, args: (String, String, Vec<String>)| {
+            run_diff_with_file_filter(lua, args)
+        })?,
     )?;
     exports.set(
         "run_diff_unstaged",

@@ -132,13 +132,22 @@ pub fn run_sl_diff(revset: &str) -> Result<Vec<difftastic::DifftFile>, String> {
 
 /// Runs difftastic via sapling for a range (two revisions).
 /// Executes `sl difft -r <old> -r <new>` to compare two revisions.
-pub fn run_sl_diff_range(old_rev: &str, new_rev: &str) -> Result<Vec<difftastic::DifftFile>, String> {
-    let output = Command::new("sl")
-        .args(["difft", "-r", old_rev, "-r", new_rev])
-        .env("DFT_DISPLAY", "json")
-        .env("DFT_UNSTABLE", "yes")
-        .output()
-        .map_err(|e| format!("Failed to run sl: {e}"))?;
+/// If `file_filter` is non-empty, only diffs those specific files.
+pub fn run_sl_diff_range(
+    old_rev: &str,
+    new_rev: &str,
+    file_filter: &[String],
+) -> Result<Vec<difftastic::DifftFile>, String> {
+    let mut cmd = Command::new("sl");
+    cmd.args(["difft", "-r", old_rev, "-r", new_rev]);
+    if !file_filter.is_empty() {
+        cmd.arg("--");
+        cmd.args(file_filter);
+    }
+    cmd.env("DFT_DISPLAY", "json")
+        .env("DFT_UNSTABLE", "yes");
+
+    let output = cmd.output().map_err(|e| format!("Failed to run sl: {e}"))?;
 
     // sl difft returns exit code 1 when there are differences (standard diff behavior)
     // Only codes > 1 indicate errors
