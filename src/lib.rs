@@ -568,7 +568,7 @@ fn run_diff_impl(
             } else {
                 vcs_sl::run_sl_diff(range).map_err(LuaError::RuntimeError)?
             };
-            let stats = vcs_sl::sl_diff_stats(range);
+            let stats = vcs_sl::sl_diff_stats_with_filter(range, file_filter);
             (files, stats)
         }
         (DiffMode::Range(range), _) => {

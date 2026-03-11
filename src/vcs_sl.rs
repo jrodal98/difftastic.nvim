@@ -49,26 +49,30 @@ pub fn sl_diff_stats_uncommitted() -> FileStats {
 }
 
 /// Gets diff stats from sapling using `sl diff --stat`.
-pub fn sl_diff_stats(revset: &str) -> FileStats {
-    let output = if let Some((old, new)) = crate::parse_jj_range(revset) {
-        // Range: use two -r flags
-        Command::new("sl")
-            .args(["diff", "--stat", "-r", &old, "-r", &new])
-            .output()
-            .ok()
+/// If `file_filter` is non-empty, only stats those specific files.
+pub fn sl_diff_stats_with_filter(revset: &str, file_filter: &[String]) -> FileStats {
+    let mut cmd = Command::new("sl");
+    if let Some((old, new)) = crate::parse_jj_range(revset) {
+        cmd.args(["diff", "--stat", "-r", &old, "-r", &new]);
     } else {
-        // Single revision: use -c flag
-        Command::new("sl")
-            .args(["diff", "--stat", "-c", revset])
-            .output()
-            .ok()
-    };
+        cmd.args(["diff", "--stat", "-c", revset]);
+    }
+    if !file_filter.is_empty() {
+        cmd.arg("--");
+        cmd.args(file_filter);
+    }
 
+    let output = cmd.output().ok();
     let Some(output) = output.filter(|o| o.status.code().unwrap_or(127) <= 1) else {
         return HashMap::new();
     };
 
     parse_sl_stat_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Gets diff stats from sapling using `sl diff --stat`.
+pub fn sl_diff_stats(revset: &str) -> FileStats {
+    sl_diff_stats_with_filter(revset, &[])
 }
 
 /// Parses `sl diff --stat` output into file stats.
