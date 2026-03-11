@@ -138,11 +138,12 @@ function M.range_ancestor_filter(end_rev)
     return string.format("(ancestors(%s)) & draft()", end_rev)
 end
 
---- Get the pre-amend commit hash from debugmutation.
---- Returns the commit before the most recent "amend" operation (skipping metaedits).
---- The most recent amend is the current commit (marked with *).
+--- Get the commit hash from before a specific mutation operation.
+--- Parses `sl debugmutation -r .` output to find the commit before the most
+--- recent occurrence of the given operation (skipping metaedits).
+--- @param operation string The mutation operation to look for (e.g. "amend", "rebase")
 --- @return string|nil Commit hash or nil if not found
-function M.get_pre_amend_commit()
+function M.get_pre_mutation_commit(operation)
     local handle = io.popen("sl debugmutation -r . 2>/dev/null")
     if not handle then
         return nil
@@ -151,8 +152,6 @@ function M.get_pre_amend_commit()
     local output = handle:read("*a")
     handle:close()
 
-    -- The first line (with *) is the current commit
-    -- We want to find what it was before the amend (skipping metaedits)
     local lines = {}
     for line in output:gmatch("[^\n]+") do
         table.insert(lines, line)
@@ -162,18 +161,16 @@ function M.get_pre_amend_commit()
         return nil
     end
 
-    -- First line should be current commit with an amend operation
+    -- First line should be current commit with the expected operation
     local current_hash, current_op = lines[1]:match("^%s*%*?%s*([a-f0-9]+)%s+(%w+)%s+by")
-    if not current_hash or current_op ~= "amend" then
-        -- Current commit wasn't created by amend
+    if not current_hash or current_op ~= operation then
         return nil
     end
 
-    -- Walk through subsequent lines, skipping metaedits, to find the pre-amend version
+    -- Walk through subsequent lines, skipping metaedits, to find the pre-operation version
     for i = 2, #lines do
         local hash, op = lines[i]:match("^%s*([a-f0-9]+)%s+(%w+)%s+by")
         if hash and op ~= "metaedit" then
-            -- Found the first non-metaedit commit after current
             return hash
         end
     end
