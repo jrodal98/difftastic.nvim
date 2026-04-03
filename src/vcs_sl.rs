@@ -112,6 +112,23 @@ fn parse_sl_stat_output(output: &str) -> FileStats {
         .collect()
 }
 
+/// Strips the sapling temp directory prefix from difftastic output paths.
+/// `sl difft` wraps paths in `<repo>.<hash>.<side>/` format (e.g.,
+/// `fbsource.283d7fe12bed.2/www/file.php`). This strips everything before and
+/// including the first `/` when the prefix matches that pattern.
+fn strip_sl_path_prefix(files: &mut [difftastic::DifftFile]) {
+    use std::sync::LazyLock;
+    static RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"^[^/]+\.[0-9a-f]+\.\d+/").unwrap());
+
+    for file in files {
+        let raw = file.path.to_string_lossy();
+        if let Some(m) = RE.find(&raw) {
+            file.path = PathBuf::from(&raw[m.end()..]);
+        }
+    }
+}
+
 /// Runs difftastic via sapling and parses the JSON output.
 /// Executes `sl difft -c <revset>` to show changes made by the revision.
 pub fn run_sl_diff(revset: &str) -> Result<Vec<difftastic::DifftFile>, String> {
@@ -130,8 +147,10 @@ pub fn run_sl_diff(revset: &str) -> Result<Vec<difftastic::DifftFile>, String> {
         return Err(format!("sl command failed: {stderr}"));
     }
 
-    difftastic::parse(&String::from_utf8_lossy(&output.stdout))
-        .map_err(|e| format!("Failed to parse difftastic JSON: {e}"))
+    let mut files = difftastic::parse(&String::from_utf8_lossy(&output.stdout))
+        .map_err(|e| format!("Failed to parse difftastic JSON: {e}"))?;
+    strip_sl_path_prefix(&mut files);
+    Ok(files)
 }
 
 /// Runs difftastic via sapling for a range (two revisions).
@@ -161,8 +180,10 @@ pub fn run_sl_diff_range(
         return Err(format!("sl command failed: {stderr}"));
     }
 
-    difftastic::parse(&String::from_utf8_lossy(&output.stdout))
-        .map_err(|e| format!("Failed to parse difftastic JSON: {e}"))
+    let mut files = difftastic::parse(&String::from_utf8_lossy(&output.stdout))
+        .map_err(|e| format!("Failed to parse difftastic JSON: {e}"))?;
+    strip_sl_path_prefix(&mut files);
+    Ok(files)
 }
 
 /// Runs difftastic via sapling for uncommitted changes (working copy).
@@ -183,8 +204,10 @@ pub fn run_sl_diff_uncommitted() -> Result<Vec<difftastic::DifftFile>, String> {
         return Err(format!("sl command failed: {stderr}"));
     }
 
-    difftastic::parse(&String::from_utf8_lossy(&output.stdout))
-        .map_err(|e| format!("Failed to parse difftastic JSON: {e}"))
+    let mut files = difftastic::parse(&String::from_utf8_lossy(&output.stdout))
+        .map_err(|e| format!("Failed to parse difftastic JSON: {e}"))?;
+    strip_sl_path_prefix(&mut files);
+    Ok(files)
 }
 
 pub fn sl_rename_map(mode: &DiffMode) -> HashMap<PathBuf, PathBuf> {
@@ -256,5 +279,31 @@ mod tests {
         let output = " file.txt |   10 ----------\n 1 file changed, 10 deletions(-)";
         let stats = parse_sl_stat_output(output);
         assert_eq!(stats.get(Path::new("file.txt")), Some(&(0, 10)));
+    }
+
+    #[test]
+    fn test_strip_sl_path_prefix() {
+        let mut files = vec![difftastic::DifftFile {
+            path: PathBuf::from("fbsource.283d7fe12bed.2/www/flib/file.php"),
+            language: "Hack".into(),
+            status: difftastic::Status::Created,
+            aligned_lines: vec![],
+            chunks: vec![],
+        }];
+        strip_sl_path_prefix(&mut files);
+        assert_eq!(files[0].path, PathBuf::from("www/flib/file.php"));
+    }
+
+    #[test]
+    fn test_strip_sl_path_prefix_no_prefix() {
+        let mut files = vec![difftastic::DifftFile {
+            path: PathBuf::from("src/lib.rs"),
+            language: "Rust".into(),
+            status: difftastic::Status::Changed,
+            aligned_lines: vec![],
+            chunks: vec![],
+        }];
+        strip_sl_path_prefix(&mut files);
+        assert_eq!(files[0].path, PathBuf::from("src/lib.rs"));
     }
 }
